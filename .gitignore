@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+dist/
+
+# Environment
+.env
+.env.test
+
+# Debug logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+.env.example
