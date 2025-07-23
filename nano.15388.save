@@ -1,0 +1,126 @@
+/model/user.ts
+import { Schema, model, Document } from 'mongoose';
+import bcrypt from 'bcryptjs';
+
+interface IUser extends Document {
+  name: string;
+  email: string;
+  password: string;
+  role: 'user' | 'admin';
+  comparePassword(candidatePassword: string): Promise<boolean>;
+}
+
+const UserSchema = new Schema<IUser>({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' }
+});
+
+// Password hashing middleware
+UserSchema.pre('save', async function(next) {
+  if (!this.isModified('password')) return next();
+  this.password = await bcrypt.hash(this.password, 10);
+  next();
+});
+
+// Password comparison method
+UserSchema.methods.comparePassword = async function(
+  candidatePassword: string
+): Promise<boolean> {
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+export default model<IUser>('User', UserSchema);
+//auth.service.ts
+import User from '@/models/User';
+import { createToken } from '@/utils/jwt';
+
+class AuthService {
+  async register(name: string, email: string, password: string) {
+    if (await User.findOne({ email })) {
+      throw new Error('Email already exists');
+    }
+    return await User.create({ name, email, password });
+  }
+
+  async login(email: string, password: string) {
+    const user = await User.findOne({ email });
+    if (!user || !(await user.comparePassword(password))) {
+      throw new Error('Invalid credentials');
+    }
+    return createToken(user.id, user.role);
+  }
+
+  async logout(res: Response) {
+    res.clearCookie('token');
+  }
+}
+
+export default new AuthService();
+//controllers/auth.controller.ts
+import { Request, Response } from 'express';
+import authService from '@/services/auth.service';
+
+class AuthController {
+  async register(req: Request, res: Response) {
+    const { name, email, password } = req.body;
+    const user = await authService.register(name, email, password);
+    res.status(201).json({ 
+      _id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role
+    });
+  }
+
+  async login(req: Request, res: Response) {
+    const { email, password } = req.body;
+    const token = await authService.login(email, password);
+    res.cookie('token', token, { httpOnly: true });
+    res.json({ token });
+  }
+
+  async logout(req: Request, res: Response) {
+    authService.logout(res);
+    res.json({ message: 'Logged out successfully' });
+  }
+}
+
+export default new AuthController();
+//utils/jwt.ts
+import jwt from 'jsonwebtoken';
+import config from '@/config/config';
+
+export const createToken = (userId: string, role: string) => {
+  return jwt.sign(
+    { id: userId, role },
+    config.JWT_SECRET,
+    { expiresIn: '1d' }
+  );
+};
+
+export const verifyToken = (token: string) => {
+  return jwt.verify(token, config.JWT_SECRET);
+};
+//routes/auth.routes.ts
+import { Router } from 'express';
+import authController from '@/controllers/auth.controller';
+import { validate } from '@/middlewares/validate';
+import { 
+  registerSchema, 
+  loginSchema 
+} from '@/validations/auth.validation';
+
+const router = Router();
+
+router.post('/register', validate(registerSchema), authController.register);
+router.post('/login', validate(loginSchema), authController.login);
+router.post('/logout', authController.logout);
+
+export default router;
+//app.ts
+// Add after other middleware
+import authRoutes from '@/routes/auth.routes';
+
+app.use('/api/auth', authRoutes);
